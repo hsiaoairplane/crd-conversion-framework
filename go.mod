@@ -6,7 +6,7 @@ toolchain go1.23.2
 
 require (
 	github.com/sirupsen/logrus v1.9.3
-	k8s.io/apiextensions-apiserver v0.32.1
+	k8s.io/apiextensions-apiserver v0.32.2
 	k8s.io/apimachinery v0.32.2
 	sigs.k8s.io/controller-runtime v0.20.1
 )

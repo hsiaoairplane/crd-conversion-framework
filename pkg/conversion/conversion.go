@@ -54,6 +54,12 @@ func (h *Handler) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if convertReview.Request == nil {
+		logrus.Error("conversion review is missing the request field")
+		rw.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
 	convertReview.Response = h.handleConvertRequest(convertReview.Request)
 	convertReview.Response.UID = convertReview.Request.UID
 
@@ -72,6 +78,7 @@ func (h *Handler) handleConvertRequest(req *apiextv1.ConversionRequest) *apiextv
 		src, gvk, err := h.decoder.Decode(obj.Raw)
 		if err != nil {
 			logrus.WithError(err).Error("error decoding src object")
+			return conversionResponseFailureWithMessagef("error decoding object: %v", err)
 		}
 		logrus.Debugf("decoding incoming obj: src %v gvk %v src type %v", src, gvk, fmt.Sprintf("%T", src))
 
@@ -143,25 +150,54 @@ func (h *Handler) convertObject(src, dst runtime.Object) error {
 }
 
 func getHub(scheme *runtime.Scheme, obj runtime.Object) (conversion.Hub, error) {
-	gvks, _, err := scheme.ObjectKinds(obj)
+	gvks, err := objectGVKs(scheme, obj)
 	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve object kinds for given object : %v", err)
+		return nil, err
 	}
 
 	var hub conversion.Hub
 	hubFoundAlready := false
-	var isHub bool
 	for _, gvk := range gvks {
-		o, _ := scheme.New(gvk)
-		if hub, isHub = o.(conversion.Hub); isHub {
+		o, err := scheme.New(gvk)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create object for %v : %v", gvk, err)
+		}
+		if h, isHub := o.(conversion.Hub); isHub {
 			if hubFoundAlready {
 				// multiple hub found, error case
-				return nil, fmt.Errorf("multiple hub version defined")
+				return nil, fmt.Errorf("multiple hub version defined for %T", obj)
 			}
 			hubFoundAlready = true
+			hub = h
 		}
 	}
+
+	if hub == nil {
+		return nil, fmt.Errorf("no hub version defined for %T", obj)
+	}
 	return hub, nil
+}
+
+// objectGVKs returns every GroupVersionKind registered in the scheme that
+// shares the Group and Kind of obj, i.e. all versions of the same API type.
+// Looking only at the kinds of obj's own Go type would never surface the hub.
+func objectGVKs(scheme *runtime.Scheme, obj runtime.Object) ([]schema.GroupVersionKind, error) {
+	objGVKs, _, err := scheme.ObjectKinds(obj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve object kinds for given object : %v", err)
+	}
+	if len(objGVKs) != 1 {
+		return nil, fmt.Errorf("expected exactly one GVK for %T, got %d", obj, len(objGVKs))
+	}
+	objGK := objGVKs[0].GroupKind()
+
+	var gvks []schema.GroupVersionKind
+	for gvk := range scheme.AllKnownTypes() {
+		if gvk.GroupKind() == objGK {
+			gvks = append(gvks, gvk)
+		}
+	}
+	return gvks, nil
 }
 
 func getTargetObject(scheme *runtime.Scheme, apiVersion, kind string) (runtime.Object, error) {

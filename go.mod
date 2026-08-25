@@ -1,4 +1,4 @@
-module github.com/jenting/crd-conversion-framework
+module github.com/hsiaoairplane/crd-conversion-framework
 
 go 1.26.0
 
